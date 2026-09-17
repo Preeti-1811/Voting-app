@@ -1,10 +1,28 @@
-# Stage 1: Build the React app
-FROM node:16-alpine 
+# =========================
+# Stage 1: Build React app
+# =========================
+FROM node:20-alpine AS builder
+
 WORKDIR /app
+
 COPY package.json package-lock.json ./
-RUN npm install
+#npm ci is intended for clean, reproducible installs using the existing package-lock.json.
+RUN npm ci   
+
 COPY . .
-EXPOSE 3001
-ENV HOST=0.0.0.0
-ENV PORT=3001
-CMD ["npm", "start"]
+
+RUN npm run build
+
+
+# =========================
+# Stage 2: Production server
+# =========================
+FROM nginx:alpine
+
+COPY --from=builder /app/build /usr/share/nginx/html
+
+COPY nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 80
+
+CMD ["nginx", "-g", "daemon off;"]

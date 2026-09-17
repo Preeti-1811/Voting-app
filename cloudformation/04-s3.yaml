@@ -1,0 +1,56 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: S3 storage for the voting application
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+Resources:
+
+  VotingAppBucket:
+    Type: AWS::S3::Bucket
+
+    DeletionPolicy: Retain    # prevent accidental deletion of the bucket and its contents
+    UpdateReplacePolicy: Retain
+
+    Properties:
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-storage'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+Outputs:
+
+  BucketName:
+    Description: S3 bucket name
+    Value: !Ref VotingAppBucket
+    Export:
+      Name: !Sub '${EnvironmentName}-VotingAppBucketName'
+
+  BucketArn:
+    Description: S3 bucket ARN
+    Value: !GetAtt VotingAppBucket.Arn
+    Export:
+      Name: !Sub '${EnvironmentName}-VotingAppBucketArn'

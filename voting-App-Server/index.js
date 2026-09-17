@@ -19,26 +19,36 @@ const cors = require('cors');
     const register = promClient.register;
     register.setContentType(promClient.Registry.OPENMETRICS_CONTENT_TYPE);
 
-    const teardownTimeout = 24 * 60 * 60 * 1000; 
+    const teardownTimeout = 24 * 60 * 60 * 1000;
     let teardownInProgress = false;
 
     app.use(bodyParser.json());
     app.use(cors());
-    let pgClient;
 
+    let pgClient;
 
     const responseBucket = new promClient.Histogram({
         name: 'voting_request_times',
         help: 'Response times for the endpoints',
-        labelNames: ['method', 'status', spanTag, 'endpoint', 'table', 'rows', 'columns'],
+        labelNames: [
+            'method',
+            'status',
+            spanTag,
+            'endpoint',
+            'table',
+            'rows',
+            'columns'
+        ],
         buckets: [10, 20, 50, 100, 200, 500, 1000, 2000, 4000, 8000, 16000],
         enableExemplars: true,
     });
 
-
     const responseMetric = (details) => {
         const timeMs = Date.now() - details.start;
-        const spanContext = api.trace.getSpan(api.context.active()).spanContext();
+        const spanContext = api.trace.getSpan(
+            api.context.active()
+        ).spanContext();
+
         responseBucket.observe({
             labels: details.labels,
             value: timeMs,
@@ -49,31 +59,41 @@ const cors = require('cors');
         });
     };
 
+    // --------------------------------------------------
+    // Prometheus metrics endpoint
+    // --------------------------------------------------
+
     app.get('/metrics', async (req, res) => {
         res.set('Content-Type', register.contentType);
         res.send(await register.metrics());
     });
 
+    // --------------------------------------------------
+    // Health check endpoint
+    // --------------------------------------------------
+
     app.get('/api/health', (req, res) => {
         const host = req.get('host');
         const forwardedHost = req.get('x-forwarded-host');
         const protocol = req.get('x-forwarded-proto') || 'http';
-        
+
         // Same logic as topic creation for URL generation
         let votingHost = forwardedHost || host;
+
         if (votingHost) {
             if (protocol === 'http' && votingHost.endsWith(':80')) {
                 votingHost = votingHost.replace(':80', '');
             } else if (protocol === 'https' && votingHost.endsWith(':443')) {
                 votingHost = votingHost.replace(':443', '');
             }
+
             if (votingHost.includes(':5000')) {
                 votingHost = votingHost.replace(':5000', '');
             }
         }
-        
-        res.json({ 
-            status: 'healthy', 
+
+        res.json({
+            status: 'healthy',
             timestamp: new Date().toISOString(),
             headers: {
                 host: req.get('host'),
@@ -91,15 +111,29 @@ const cors = require('cors');
         });
     });
 
-    Pyroscope.init({ appName: 'voting-app-database-server' });
+    // --------------------------------------------------
+    // Pyroscope
+    // --------------------------------------------------
+
+    Pyroscope.init({
+        appName: 'voting-app-database-server'
+    });
+
     app.use(expressMiddleware());
+
+    // --------------------------------------------------
+    // Create Topic
+    // --------------------------------------------------
 
     app.post('/api/topics', async (req, res) => {
         const currentSpan = api.trace.getSpan(api.context.active());
         const traceId = currentSpan.spanContext().traceId;
 
         let metricBody = {
-            labels: { method: 'POST', endpoint: 'createTopic' },
+            labels: {
+                method: 'POST',
+                endpoint: 'createTopic'
+            },
             start: Date.now(),
         };
 
@@ -109,16 +143,28 @@ const cors = require('cors');
         if (!topic || !description) {
             metricBody.labels.status = '400';
             responseMetric(metricBody);
-            res.status(400).send('Topic name and description are required.');
+
+            res.status(400).send(
+                'Topic name and description are required.'
+            );
+
             return;
         }
 
         try {
             // Insert topic into the database
-            const query = `INSERT INTO topics (name, description) VALUES ($1, $2) RETURNING id`;
-            const result = await pgClient.query(query, [topic, description]);
+            const query = `
+                INSERT INTO topics (name, description)
+                VALUES ($1, $2)
+                RETURNING id
+            `;
 
-            // Get the total number of topics
+            const result = await pgClient.query(query, [
+                topic,
+                description
+            ]);
+
+            // Get total number of topics
             const tableDetail = await pgClient.query(
                 `SELECT COUNT(*) AS row_count FROM topics`
             );
@@ -128,9 +174,10 @@ const cors = require('cors');
             metricBody.labels.table = 'topics';
             metricBody.labels.rows = tableDetail.rows[0].row_count;
             metricBody.labels.columns = 'name, description';
+
             responseMetric(metricBody);
 
-            // Log the creation of the new topic
+            // Log creation
             logEntry({
                 level: 'info',
                 traceID: traceId,
@@ -143,39 +190,51 @@ const cors = require('cors');
                 columns: 'name, description',
             });
 
-            // Respond with success
+            // Generate voting URL
             const host = req.get('host');
             const forwardedHost = req.get('x-forwarded-host');
             const protocol = req.get('x-forwarded-proto') || 'http';
-            
-            // Determine the correct host for the voting URL
+
             let votingHost = forwardedHost || host;
-            
-            // Remove port numbers for standard ports
+
+            // Remove standard ports
             if (votingHost) {
-                // Remove :80 for HTTP or :443 for HTTPS as they're default ports
-                if (protocol === 'http' && votingHost.endsWith(':80')) {
+                if (
+                    protocol === 'http' &&
+                    votingHost.endsWith(':80')
+                ) {
                     votingHost = votingHost.replace(':80', '');
-                } else if (protocol === 'https' && votingHost.endsWith(':443')) {
+                } else if (
+                    protocol === 'https' &&
+                    votingHost.endsWith(':443')
+                ) {
                     votingHost = votingHost.replace(':443', '');
                 }
-                // Remove any internal port numbers like :5000
+
+                // Remove internal backend port
                 if (votingHost.includes(':5000')) {
                     votingHost = votingHost.replace(':5000', '');
                 }
             }
-            
-            const votingUrl = `${protocol}://${votingHost}/vote/${result.rows[0].id}`;
-            
+
+            const votingUrl =
+                `${protocol}://${votingHost}/vote/${result.rows[0].id}`;
+
             console.log('Generated voting URL:', votingUrl);
             console.log('Host header:', req.get('host'));
-            console.log('X-Forwarded-Host header:', req.get('x-forwarded-host'));
+            console.log(
+                'X-Forwarded-Host header:',
+                req.get('x-forwarded-host')
+            );
             console.log('Final voting host:', votingHost);
             console.log('Protocol:', protocol);
-            
-            res.status(201).json({ message: 'Topic created successfully!', votingUrl });
+
+            res.status(201).json({
+                message: 'Topic created successfully!',
+                votingUrl
+            });
+
         } catch (err) {
-            // Handle errors during topic creation
             metricBody.labels.status = '500';
             responseMetric(metricBody);
 
@@ -195,13 +254,19 @@ const cors = require('cors');
         }
     });
 
+    // --------------------------------------------------
+    // Get Topic Description
+    // --------------------------------------------------
 
     app.get('/api/topics/:topic/vote', async (req, res) => {
         const currentSpan = api.trace.getSpan(api.context.active());
         const traceId = currentSpan.spanContext().traceId;
 
         let metricBody = {
-            labels: { method: 'GET', endpoint: 'get-topic-description' },
+            labels: {
+                method: 'GET',
+                endpoint: 'get-topic-description'
+            },
             start: Date.now(),
         };
 
@@ -209,13 +274,12 @@ const cors = require('cors');
 
         try {
             const result = await pgClient.query(
-                `SELECT name,description FROM topics WHERE id = $1`,
+                `SELECT name, description FROM topics WHERE id = $1`,
                 [topic]
-              );
-              
-              // Extract the description value from the first row
-              const description = result.rows[0]?.description;
-              const topicName = result.rows[0]?.name;
+            );
+
+            const description = result.rows[0]?.description;
+            const topicName = result.rows[0]?.name;
 
             if (!description) {
                 metricBody.labels.status = '404';
@@ -251,7 +315,11 @@ const cors = require('cors');
                 columns: 'description',
             });
 
-            res.json({ topic: topicName , description });
+            res.json({
+                topic: topicName,
+                description
+            });
+
         } catch (err) {
             metricBody.labels.status = '500';
             responseMetric(metricBody);
@@ -262,23 +330,32 @@ const cors = require('cors');
                 namespace: process.env.NAMESPACE,
                 job: `${servicePrefix}-server`,
                 endpoint: 'get-topic-description',
-                message: `Error fetching topic description for '${topic}': ${err.message}`,
+                message:
+                    `Error fetching topic description for '${topic}': ${err.message}`,
                 table: 'topics',
                 rows: 0,
                 columns: 'description',
             });
 
-            res.status(500).json({ error: 'Internal Server Error' });
+            res.status(500).json({
+                error: 'Internal Server Error'
+            });
         }
     });
 
+    // --------------------------------------------------
+    // Submit Vote
+    // --------------------------------------------------
 
     app.post('/api/topics/:topic/vote', async (req, res) => {
         const currentSpan = api.trace.getSpan(api.context.active());
         const traceId = currentSpan.spanContext().traceId;
 
         let metricBody = {
-            labels: { method: 'POST', endpoint: 'vote' },
+            labels: {
+                method: 'POST',
+                endpoint: 'vote'
+            },
             start: Date.now(),
         };
 
@@ -302,25 +379,37 @@ const cors = require('cors');
                 columns: 'vote, name',
             });
 
-            return res.status(400).json({ error: 'Vote and name are required' });
+            return res.status(400).json({
+                error: 'Vote and name are required'
+            });
         }
 
         try {
-            // Insert the vote into the database
-            const query = `INSERT INTO votes (topic_id, name, vote) VALUES ($1, $2, $3) RETURNING id`;
-            const result = await pgClient.query(query, [topic, name, vote]);
+            const query = `
+                INSERT INTO votes (topic_id, name, vote)
+                VALUES ($1, $2, $3)
+                RETURNING id
+            `;
 
-            // Get the total count of votes for the topic
+            const result = await pgClient.query(query, [
+                topic,
+                name,
+                vote
+            ]);
+
+            // Get total vote count
             const tableDetail = await pgClient.query(
-                `SELECT COUNT(*) AS row_count FROM votes WHERE topic_id = $1`,
+                `SELECT COUNT(*) AS row_count
+                 FROM votes
+                 WHERE topic_id = $1`,
                 [topic]
             );
 
-            // Metrics for the vote insertion
             metricBody.labels.status = '201';
             metricBody.labels.table = 'votes';
             metricBody.labels.rows = tableDetail.rows[0].row_count;
             metricBody.labels.columns = 'topic_id, name, vote';
+
             responseMetric(metricBody);
 
             logEntry({
@@ -329,15 +418,18 @@ const cors = require('cors');
                 namespace: process.env.NAMESPACE,
                 job: `${servicePrefix}-server`,
                 endpoint: 'vote',
-                message: `Vote submitted successfully for topic '${topic}' by ${name} with vote ID ${result.rows[0].id}`,
+                message:
+                    `Vote submitted successfully for topic '${topic}' by ${name} with vote ID ${result.rows[0].id}`,
                 table: 'votes',
                 rows: tableDetail.rows[0].row_count,
                 columns: 'topic_id, name, vote',
             });
 
-            res.status(201).json({ message: 'Vote counted!' });
+            res.status(201).json({
+                message: 'Vote counted!'
+            });
+
         } catch (err) {
-            // Handle errors
             metricBody.labels.status = '500';
             responseMetric(metricBody);
 
@@ -347,49 +439,64 @@ const cors = require('cors');
                 namespace: process.env.NAMESPACE,
                 job: `${servicePrefix}-server`,
                 endpoint: 'vote',
-                message: `Error processing vote for topic '${topic}': ${err.message}`,
+                message:
+                    `Error processing vote for topic '${topic}': ${err.message}`,
                 table: 'votes',
                 rows: 0,
                 columns: 'topic_id, name, vote',
             });
 
-            res.status(500).json({ error: 'Internal Server Error' });
+            res.status(500).json({
+                error: 'Internal Server Error'
+            });
         }
     });
 
+    // --------------------------------------------------
+    // Get Voting Results
+    // --------------------------------------------------
 
     app.get('/api/topics/:topic/results', async (req, res) => {
         const currentSpan = api.trace.getSpan(api.context.active());
         const traceId = currentSpan.spanContext().traceId;
-    
+
         let metricBody = {
-            labels: { method: 'GET', endpoint: '/api/topics/:topic/results' },
+            labels: {
+                method: 'GET',
+                endpoint: '/api/topics/:topic/results'
+            },
             start: Date.now(),
         };
-    
+
         const { topic } = req.params;
-    
+
         if (!topic) {
             metricBody.labels.status = '400';
             responseMetric(metricBody);
+
             res.status(400).send('Topic ID is required.');
+
             return;
         }
-    
+
         try {
             const result = await pgClient.query(
-                `SELECT vote,name FROM votes WHERE topic_id = $1`,
+                `SELECT vote, name
+                 FROM votes
+                 WHERE topic_id = $1`,
                 [topic]
             );
 
             const topicName = await pgClient.query(
-                `SELECT name FROM topics WHERE id = $1`,
+                `SELECT name
+                 FROM topics
+                 WHERE id = $1`,
                 [topic]
             );
-    
+
             const agreeVotes = [];
             const notAgreeVotes = [];
-    
+
             result.rows.forEach((row) => {
                 if (row.vote === 'agree') {
                     agreeVotes.push(row.name);
@@ -397,18 +504,21 @@ const cors = require('cors');
                     notAgreeVotes.push(row.name);
                 }
             });
-    
+
             const tableDetail = await pgClient.query(
-                `SELECT COUNT(*) AS row_count FROM votes WHERE topic_id = $1`,
+                `SELECT COUNT(*) AS row_count
+                 FROM votes
+                 WHERE topic_id = $1`,
                 [topic]
             );
-    
+
             metricBody.labels.status = '200';
             metricBody.labels.table = 'votes';
             metricBody.labels.rows = tableDetail.rows[0].row_count;
             metricBody.labels.columns = 'vote';
+
             responseMetric(metricBody);
-    
+
             logEntry({
                 level: 'info',
                 traceID: traceId,
@@ -420,7 +530,7 @@ const cors = require('cors');
                 rows: tableDetail.rows[0].row_count,
                 columns: 'vote',
             });
-    
+
             res.status(200).json({
                 topic: topicName.rows[0].name,
                 countAgree: agreeVotes.length,
@@ -430,10 +540,11 @@ const cors = require('cors');
                     notAgree: notAgreeVotes,
                 },
             });
+
         } catch (err) {
             metricBody.labels.status = '500';
             responseMetric(metricBody);
-    
+
             logEntry({
                 level: 'error',
                 traceID: traceId,
@@ -445,120 +556,136 @@ const cors = require('cors');
                 rows: 0,
                 columns: 'vote',
             });
-    
+
             res.status(500).send('Error fetching result.');
         }
     });
 
+    // --------------------------------------------------
+    // PostgreSQL Connection
+    // --------------------------------------------------
+
     const startServer = async () => {
         const requestSpan = tracer.startSpan('server');
-        await api.context.with(api.trace.setSpan(api.context.active(), requestSpan), async () => {
-            try {
-                logEntry({
-                    level: 'info',
-                    job: `${servicePrefix}-server`,
-                    namespace: process.env.NAMESPACE,
-                    message: 'Connecting to Postgres...',
-                });
-    
-                // Initial connection to Postgres (default database, usually 'postgres')
-                pgClient = new Client({
-                    host: 'voting-app-database',
-                    port: 5432,
-                    user: 'postgres',
-                    password: 'postgres',
-                });
-    
-                await pgClient.connect();
-    
-                // Check if the database exists
-                const results = await pgClient.query(`SELECT datname FROM pg_database WHERE datname = '${spanTag}'`);
-                if (results.rows.length === 0) {
-                    logEntry({
-                        level: 'info',
-                        job: `${servicePrefix}-server`,
-                        namespace: process.env.NAMESPACE,
-                        message: `Database '${spanTag}' not found, creating...`,
-                    });
-    
-                    // Create the database if it doesn't exist
-                    await pgClient.query(`CREATE DATABASE ${spanTag}`);
-                    logEntry({
-                        level: 'info',
-                        job: `${servicePrefix}-server`,
-                        namespace: process.env.NAMESPACE,
-                        message: `Database '${spanTag}' created.`,
-                    });
-                }
-    
-                // Disconnect from the current database and reconnect to the newly created one
-                await pgClient.end();
-                pgClient = new Client({
-                    host: 'voting-app-database',
-                    port: 5432,
-                    user: 'postgres',
-                    password: 'postgres',
-                    database: spanTag, // Connect to the newly created database
-                });
-    
-                await pgClient.connect();
-    
-                // Create 'votes' table if it doesn't exist
-                await pgClient.query(`
-                    CREATE TABLE IF NOT EXISTS votes (
-                        id SERIAL PRIMARY KEY,
-                        topic_id INT NOT NULL,
-                        name VARCHAR(255) NOT NULL,
-                        vote VARCHAR(255) NOT NULL,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                `);
-    
-                // Create 'topics' table if it doesn't exist
-                await pgClient.query(`
-                    CREATE TABLE IF NOT EXISTS topics (
-                        id SERIAL PRIMARY KEY,
-                        name VARCHAR(255) NOT NULL,
-                        description TEXT,
-                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                    )
-                `);
-    
-                logEntry({
-                    level: 'info',
-                    namespace: process.env.NAMESPACE,
-                    job: `${servicePrefix}-server`,
-                    message: 'Tables ensured in database.',
-                });
 
-            } catch (err) {
-                if (pgClient) {
-                    await pgClient.end(); // Ensure the client disconnects in case of error
+        await api.context.with(
+            api.trace.setSpan(api.context.active(), requestSpan),
+            async () => {
+                try {
+                    logEntry({
+                        level: 'info',
+                        job: `${servicePrefix}-server`,
+                        namespace: process.env.NAMESPACE,
+                        message: 'Connecting to Postgres...',
+                    });
+
+                    // Read database configuration from environment variables.
+                    // This allows the same Docker image to work in
+                    // DEV, TEST and PROD.
+                    const dbHost = process.env.DB_HOST;
+                    const dbPort = Number(process.env.DB_PORT || 5432);
+                    const dbUser = process.env.DB_USER;
+                    const dbPassword = process.env.DB_PASSWORD;
+                    const dbName = process.env.DB_NAME || spanTag;
+
+                    // Validate required database configuration.
+                    if (!dbHost || !dbUser || !dbPassword) {
+                        throw new Error(
+                            'Missing required database environment variables: DB_HOST, DB_USER, DB_PASSWORD'
+                        );
+                    }
+
+                    // Connect directly to the configured database.
+                    pgClient = new Client({
+                        host: dbHost,
+                        port: dbPort,
+                        user: dbUser,
+                        password: dbPassword,
+                        database: dbName,
+                    });
+
+                    await pgClient.connect();
+
+                    logEntry({
+                        level: 'info',
+                        job: `${servicePrefix}-server`,
+                        namespace: process.env.NAMESPACE,
+                        message:
+                            `Connected to PostgreSQL database '${dbName}'`,
+                    });
+
+                    // --------------------------------------------------
+                    // Create votes table if it doesn't exist
+                    // --------------------------------------------------
+
+                    await pgClient.query(`
+                        CREATE TABLE IF NOT EXISTS votes (
+                            id SERIAL PRIMARY KEY,
+                            topic_id INT NOT NULL,
+                            name VARCHAR(255) NOT NULL,
+                            vote VARCHAR(255) NOT NULL,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `);
+
+                    // --------------------------------------------------
+                    // Create topics table if it doesn't exist
+                    // --------------------------------------------------
+
+                    await pgClient.query(`
+                        CREATE TABLE IF NOT EXISTS topics (
+                            id SERIAL PRIMARY KEY,
+                            name VARCHAR(255) NOT NULL,
+                            description TEXT,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                        )
+                    `);
+
+                    logEntry({
+                        level: 'info',
+                        namespace: process.env.NAMESPACE,
+                        job: `${servicePrefix}-server`,
+                        message: 'Tables ensured in database.',
+                    });
+
+                } catch (err) {
+                    if (pgClient) {
+                        await pgClient.end();
+                    }
+
+                    logEntry({
+                        level: 'error',
+                        namespace: process.env.NAMESPACE,
+                        job: `${servicePrefix}-server`,
+                        message: `Error starting database: ${err}`,
+                    });
+
+                    // Retry database connection after 5 seconds.
+                    setTimeout(startServer, 5000);
+
+                } finally {
+                    requestSpan.end();
                 }
-                logEntry({
-                    level: 'error',
-                    namespace: process.env.NAMESPACE,
-                    job: `${servicePrefix}-server`,
-                    message: `Error starting database: ${err}`,
-                });
-                setTimeout(startServer, 5000); // Retry starting the server after 5 seconds
-            } finally {
-                requestSpan.end();
             }
-        });
+        );
     };
-    
-    // Ensure the server listens on port 5000 on all interfaces
-    app.listen(5000, '0.0.0.0', () =>
+
+    // --------------------------------------------------
+    // Start HTTP Server
+    // --------------------------------------------------
+
+    const serverPort = Number(process.env.PORT || 5000);
+
+    app.listen(serverPort, '0.0.0.0', () =>
         logEntry({
             level: 'info',
             namespace: process.env.NAMESPACE,
             job: `${servicePrefix}-server`,
-            message: `${servicePrefix} server is running on port 5000`,
+            message:
+                `${servicePrefix} server is running on port ${serverPort}`,
         })
     );
-    
+
     startServer();
-    
-    
+
 })();

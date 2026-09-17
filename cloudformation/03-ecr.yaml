@@ -1,0 +1,79 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: ECR repositories for the voting application
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+Resources:
+
+  FrontendRepository:
+    Type: AWS::ECR::Repository    # create an ECR repository for the frontend application
+    Properties:
+      RepositoryName: !Sub '${EnvironmentName}-voting-app-frontend'
+
+      ImageTagMutability: IMMUTABLE
+
+      ImageScanningConfiguration:
+        ScanOnPush: true    # enable image scanning FOR SECURITY CONTROL
+        
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-frontend'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+  BackendRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub '${EnvironmentName}-voting-app-backend'
+
+      ImageTagMutability: IMMUTABLE
+
+      ImageScanningConfiguration:
+        ScanOnPush: true
+
+      EncryptionConfiguration:
+        EncryptionType: AES256
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-backend'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+Outputs:
+
+  FrontendRepositoryName:
+    Description: Frontend ECR repository name
+    Value: !Ref FrontendRepository
+    Export:
+      Name: !Sub '${EnvironmentName}-FrontendRepositoryName'
+
+  FrontendRepositoryUri:
+    Description: Frontend ECR repository URI
+    Value: !GetAtt FrontendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${EnvironmentName}-FrontendRepositoryUri'
+
+  BackendRepositoryName:
+    Description: Backend ECR repository name
+    Value: !Ref BackendRepository
+    Export:
+      Name: !Sub '${EnvironmentName}-BackendRepositoryName'
+
+  BackendRepositoryUri:
+    Description: Backend ECR repository URI
+    Value: !GetAtt BackendRepository.RepositoryUri
+    Export:
+      Name: !Sub '${EnvironmentName}-BackendRepositoryUri'

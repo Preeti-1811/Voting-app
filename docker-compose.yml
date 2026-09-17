@@ -1,13 +1,15 @@
 version: '3'
 
 services:
-  # A postgres DB used to store data by the API server microservice.
+  # PostgreSQL database used by the API server.
   voting-app-database:
     image: postgres:14.5
     container_name: voting-app-database
     restart: always
     environment:
+      POSTGRES_USER: "postgres"
       POSTGRES_PASSWORD: "postgres"
+      POSTGRES_DB: "votingdb"
     volumes:
       - "postgres:/var/lib/postgresql/data"
     ports:
@@ -15,12 +17,10 @@ services:
     networks:
       - voting-app-network
 
-  # The API server microservice.
-  # It writes logs directly to the Loki service, exposes metrics for the Prometheus
-  # service and sends traces to the Grafana Alloy instance.
+  # Node.js API server.
   voting-app-server:
     build:
-     context: ./voting-App-Server
+      context: ./voting-App-Server
     container_name: voting-app-server
     restart: always
     ports:
@@ -28,18 +28,31 @@ services:
     depends_on:
       - voting-app-database
     environment:
-      - NAMESPACE=production
-      - LOGS_TARGET=http://alloy:3100/loki/api/v1/push
-      - TRACING_COLLECTOR_HOST=alloy
-      - TRACING_COLLECTOR_PORT=4317
+      # Application configuration
+      - NAMESPACE=development
+      - PORT=5000
+
+      # PostgreSQL configuration
+      - DB_HOST=voting-app-database
+      - DB_PORT=5432
+      - DB_NAME=votingdb
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+
+      # Observability configuration
+      #- LOGS_TARGET=http://alloy:3100/loki/api/v1/push
+      #- TRACING_COLLECTOR_HOST=alloy
+      #- TRACING_COLLECTOR_PORT=4317
       - OTEL_EXPORTER_OTLP_TRACES_INSECURE=true
       - OTEL_RESOURCE_ATTRIBUTES=ip=1.2.3.5
+
     networks:
       - voting-app-network
 
+  # React frontend.
   voting-app-client:
     build:
-     context: ./voting-App-Client
+      context: ./voting-App-Client
     container_name: voting-app-client
     restart: always
     ports:
@@ -49,11 +62,13 @@ services:
       - PORT=3001
       - REACT_APP_URL=/api
     networks:
-      - voting-app-network       
-  
+      - voting-app-network
+
+  # Nginx reverse proxy.
   nginx:
     image: nginx:alpine
     container_name: voting-app-nginx
+    restart: always
     ports:
       - "80:80"
     volumes:

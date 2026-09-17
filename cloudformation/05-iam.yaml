@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: IAM roles for the voting application
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+Resources:
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-voting-app-ecs-execution-role'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-ecs-execution-role'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-voting-app-ecs-task-role'
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+
+        Statement:
+          - Effect: Allow
+
+            Principal:
+              Service:
+                - ecs-tasks.amazonaws.com
+
+            Action:
+              - sts:AssumeRole
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-ecs-task-role'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+Outputs:
+
+  ECSTaskExecutionRoleArn:
+    Description: ECS task execution role ARN
+    Value: !GetAtt ECSTaskExecutionRole.Arn
+
+    Export:
+      Name: !Sub '${EnvironmentName}-ECSTaskExecutionRoleArn'
+
+
+  ECSTaskRoleArn:
+    Description: ECS task role ARN
+    Value: !GetAtt ECSTaskRole.Arn
+
+    Export:
+      Name: !Sub '${EnvironmentName}-ECSTaskRoleArn'

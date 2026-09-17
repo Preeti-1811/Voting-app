@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: PostgreSQL RDS database for the voting application
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+  DBName:
+    Type: String
+    Default: votingdb
+    Description: PostgreSQL database name
+
+  DBUsername:
+    Type: String
+    Default: votingadmin
+    Description: PostgreSQL master username
+
+Resources:
+
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+
+    Properties:
+      DBSubnetGroupDescription: Private subnets for voting application database
+
+      SubnetIds:
+        - !ImportValue
+          Fn::Sub: '${EnvironmentName}-PrivateSubnet1'
+        - !ImportValue
+          Fn::Sub: '${EnvironmentName}-PrivateSubnet2'
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-db-subnet-group'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+  DatabaseSecret:
+    Type: AWS::SecretsManager::Secret
+
+    Properties:
+      Name: !Sub '${EnvironmentName}-voting-app-db-secret'
+
+      Description: Database credentials for the voting application
+
+      GenerateSecretString:
+        SecretStringTemplate: !Sub |
+          {
+            "username": "${DBUsername}",
+            "dbname": "${DBName}"
+          }
+
+        GenerateStringKey: password
+
+        PasswordLength: 32
+
+        ExcludeCharacters: '"@/\'
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-app-db-secret'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+  VotingDatabase:
+    Type: AWS::RDS::DBInstance
+
+    DeletionPolicy: Snapshot  # prevent accidental deletion of the database and its contents
+    UpdateReplacePolicy: Snapshot
+
+    Properties:
+
+      DBInstanceIdentifier: !Sub '${EnvironmentName}-voting-db'
+
+      Engine: postgres
+
+      DBName: !Ref DBName
+
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:username}}'
+
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DatabaseSecret}:SecretString:password}}'
+
+      DBInstanceClass: db.t3.micro
+
+      AllocatedStorage: 20
+
+      StorageType: gp3
+
+      StorageEncrypted: true
+
+      PubliclyAccessible: false
+
+      MultiAZ: false
+
+      DBSubnetGroupName: !Ref DBSubnetGroup
+
+      VPCSecurityGroups:
+        - !ImportValue
+          Fn::Sub: '${EnvironmentName}-RDSSecurityGroup'
+
+      BackupRetentionPeriod: 7
+
+      AutoMinorVersionUpgrade: true
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-voting-db'
+
+        - Key: Environment
+          Value: !Ref EnvironmentName
+
+
+Outputs:
+
+  DatabaseEndpoint:
+    Description: PostgreSQL database endpoint
+    Value: !GetAtt VotingDatabase.Endpoint.Address
+    Export:
+      Name: !Sub '${EnvironmentName}-DatabaseEndpoint'
+
+
+  DatabasePort:
+    Description: PostgreSQL database port
+    Value: !GetAtt VotingDatabase.Endpoint.Port
+    Export:
+      Name: !Sub '${EnvironmentName}-DatabasePort'
+
+
+  DatabaseName:
+    Description: PostgreSQL database name
+    Value: !Ref DBName
+    Export:
+      Name: !Sub '${EnvironmentName}-DatabaseName'
+
+
+  DatabaseSecretArn:
+    Description: ARN of the database credentials secret
+    Value: !Ref DatabaseSecret
+    Export:
+      Name: !Sub '${EnvironmentName}-DatabaseSecretArn'

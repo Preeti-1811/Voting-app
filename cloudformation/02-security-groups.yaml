@@ -1,0 +1,146 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: Security groups for the voting application
+
+Parameters:
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: Environment name
+
+
+Resources:
+
+  # =========================================================
+  # ALB Security Group
+  # =========================================================
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow HTTP and HTTPS traffic to the Application Load Balancer
+      VpcId: !ImportValue
+        Fn::Sub: '${EnvironmentName}-VotingVPC'
+
+      SecurityGroupIngress:
+
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTP from the internet
+
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: Allow HTTPS from the internet
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-alb-sg'
+
+
+  # =========================================================
+  # Frontend Security Group
+  # =========================================================
+
+  FrontendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow frontend traffic only from the ALB
+      VpcId: !ImportValue
+        Fn::Sub: '${EnvironmentName}-VotingVPC'
+
+      SecurityGroupIngress:
+
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow HTTP from ALB
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-frontend-sg'
+
+
+  # =========================================================
+  # Backend Security Group
+  # =========================================================
+
+  BackendSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow backend traffic only from the ALB
+      VpcId: !ImportValue
+        Fn::Sub: '${EnvironmentName}-VotingVPC'
+
+      SecurityGroupIngress:
+
+        - IpProtocol: tcp
+          FromPort: 5000
+          ToPort: 5000
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+          Description: Allow backend API traffic from ALB
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-backend-sg'
+
+
+  # =========================================================
+  # RDS Security Group
+  # =========================================================
+
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow PostgreSQL traffic only from the backend
+      VpcId: !ImportValue
+        Fn::Sub: '${EnvironmentName}-VotingVPC'
+
+      SecurityGroupIngress:
+
+        - IpProtocol: tcp
+          FromPort: 5432
+          ToPort: 5432
+          SourceSecurityGroupId: !Ref BackendSecurityGroup
+          Description: Allow PostgreSQL from backend
+
+      Tags:
+        - Key: Name
+          Value: !Sub '${EnvironmentName}-rds-sg'
+
+
+# =========================================================
+# Outputs
+# =========================================================
+
+Outputs:
+
+  ALBSecurityGroupId:
+    Description: ALB security group ID
+    Value: !Ref ALBSecurityGroup
+    Export:
+      Name: !Sub '${EnvironmentName}-ALBSecurityGroup'
+
+  FrontendSecurityGroupId:
+    Description: Frontend security group ID
+    Value: !Ref FrontendSecurityGroup
+    Export:
+      Name: !Sub '${EnvironmentName}-FrontendSecurityGroup'
+
+  BackendSecurityGroupId:
+    Description: Backend security group ID
+    Value: !Ref BackendSecurityGroup
+    Export:
+      Name: !Sub '${EnvironmentName}-BackendSecurityGroup'
+
+  RDSSecurityGroupId:
+    Description: RDS security group ID
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub '${EnvironmentName}-RDSSecurityGroup'
+      
